@@ -57,7 +57,7 @@ Trystero library. You only need it to upgrade Trystero.
 
 | Action | How |
 | --- | --- |
-| Tools | toolbar, or keys `V` select, `H` pan, `N` sticky, `T` text, `R` rectangle, `O` ellipse, `P` pen |
+| Tools | toolbar, or keys `V` select, `H` pan, `N` sticky, `T` text, `R` rectangle, `O` ellipse, `P` pen, `E` eraser |
 | Add a sticky fast | double-click empty canvas |
 | Edit text | double-click an item, or select it and press `Enter` |
 | Move / resize | drag an item / drag its corner handle |
@@ -65,3 +65,5 @@ Trystero library. You only need it to upgrade Trystero.
 | Pan | scroll, hold `Space` and drag, middle-drag, or one-finger drag on touch |
 | Zoom | `Ctrl`/`⌘` + scroll (trackpad pinch), or the +/− buttons |
 | Duplicate / delete | `Ctrl`/`⌘`+`D` / `Delete` |
+| Erase drawings | eraser tool: drag over pen strokes (sticky notes, text and shapes are left alone) |
+| Undo / redo | toolbar buttons, or `Ctrl`/`⌘`+`Z` / `Ctrl`/`⌘`+`Shift`+`Z` (also `Ctrl`+`Y`). Undo only reverts your own changes, never other people's |

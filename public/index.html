@@ -83,7 +83,16 @@
       <button data-tool="pen" title="Pen (P)">
         <svg viewBox="0 0 24 24"><path d="M4 20l1-4L16 5l3 3L8 19z M14 7l3 3"/></svg>
       </button>
+      <button data-tool="eraser" title="Eraser (E), erases pen strokes">
+        <svg viewBox="0 0 24 24"><path d="M8.5 20H20 M4.6 15.4l9.2-9.2a2 2 0 012.8 0l3.2 3.2a2 2 0 010 2.8L12 20H8.5l-3.9-3.9a.9.9 0 010-.7z M9.5 10.5l5 5"/></svg>
+      </button>
       <hr>
+      <button id="undo" title="Undo (Ctrl+Z)" disabled>
+        <svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5 M4 9h10.5a5.5 5.5 0 010 11H11"/></svg>
+      </button>
+      <button id="redo" title="Redo (Ctrl+Shift+Z)" disabled>
+        <svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5 M20 9H9.5a5.5 5.5 0 000 11H13"/></svg>
+      </button>
       <button id="clear" title="Clear board">
         <svg viewBox="0 0 24 24"><path d="M4 7h16 M9 7V4h6v3 M6 7l1 13h10l1-13"/></svg>
       </button>

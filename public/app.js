@@ -68,6 +68,7 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
   let colorIndex = 0;
   let maxZ = 0;
   let spaceDown = false;
+  const erasing = new Set(); // pen strokes marked by an eraser drag that's still in progress
   const view = { x: 0, y: 0, z: 1 };
 
   const me = loadIdentity();
@@ -185,6 +186,7 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
   }
 
   function queueDelete(id) {
+    noteBefore(id);
     const item = items.get(id);
     const tomb = { id, v: ((item && item.v) || 0) + 1, by: selfId };
     removeItem(id);
@@ -435,7 +437,8 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
     el.className = `item ${item.type}` +
       (isSel ? ' selected' : '') +
       (isSel && selected.size === 1 ? ' single' : '') +
-      (editingId === item.id ? ' editing' : '');
+      (editingId === item.id ? ' editing' : '') +
+      (erasing.has(item.id) ? ' erasing' : '');
     el.style.left = `${item.x}px`;
     el.style.top = `${item.y}px`;
     el.style.width = `${item.w}px`;
@@ -456,7 +459,11 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
   }
 
   function removeItem(id) {
-    if (editingId === id) editingId = null;
+    if (editingId === id) {
+      // Someone else deleted the item we were typing in.
+      editingId = null;
+      commitChange();
+    }
     const el = els.get(id);
     if (el) el.remove();
     els.delete(id);
@@ -479,6 +486,8 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
   function startEditing(id) {
     const item = items.get(id);
     if (!item || item.type === 'pen') return;
+    beginChange();
+    noteBefore(id);
     editingId = id;
     setSelection([id]);
     const text = els.get(id).querySelector('.text');
@@ -508,6 +517,90 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
       render(item);
     }
     flush();
+    commitChange();
+  }
+
+  // ---------- Undo / redo ----------
+  // Each entry is one user action: the before/after state of every item it touched
+  // (null = didn't exist). Only your own actions are recorded, and undoing one is sent
+  // to everyone as a normal edit, so it never rolls back what other people did.
+  const undoStack = [];
+  let redoStack = [];
+  let txn = null; // Map id -> state before the current action
+
+  const snap = (item) => {
+    if (!item) return null;
+    const { v, by, ...rest } = item;
+    return JSON.parse(JSON.stringify(rest));
+  };
+
+  function beginChange() {
+    if (!txn) txn = new Map();
+  }
+
+  function noteBefore(id) {
+    if (txn && !txn.has(id)) txn.set(id, snap(items.get(id)));
+  }
+
+  function commitChange() {
+    if (!txn) return;
+    const changes = [];
+    for (const [id, before] of txn) {
+      const after = snap(items.get(id));
+      if (JSON.stringify(before) !== JSON.stringify(after)) changes.push({ id, before, after });
+    }
+    txn = null;
+    if (changes.length) {
+      undoStack.push(changes);
+      if (undoStack.length > 200) undoStack.shift();
+      redoStack = [];
+    }
+    updateHistoryButtons();
+  }
+
+  function restoreState(id, state) {
+    if (!state) {
+      if (items.has(id)) queueDelete(id);
+      return;
+    }
+    let item = items.get(id);
+    if (item) {
+      Object.assign(item, JSON.parse(JSON.stringify(state)));
+    } else {
+      // Bring a deleted item back with a version above its tombstone so peers accept it.
+      const tomb = tombs.get(id);
+      item = { ...JSON.parse(JSON.stringify(state)), v: tomb ? tomb.v : 0 };
+      tombs.delete(id);
+      items.set(id, item);
+    }
+    maxZ = Math.max(maxZ, item.z || 0);
+    render(item);
+    queueUpsert(item);
+  }
+
+  function travel(from, to, direction) {
+    if (editingId) stopEditing();
+    const changes = from.pop();
+    if (!changes) return;
+    const target = direction === 'undo' ? 'before' : 'after';
+    const expected = direction === 'undo' ? 'after' : 'before';
+    for (const c of changes) {
+      // Leave alone items someone else has since deleted rather than resurrecting them.
+      if (c[expected] && !items.has(c.id)) continue;
+      restoreState(c.id, c[target]);
+    }
+    to.push(changes);
+    flush();
+    setSelection(changes.filter((c) => c[target] && items.has(c.id)).map((c) => c.id));
+    updateHistoryButtons();
+  }
+
+  const undo = () => travel(undoStack, redoStack, 'undo');
+  const redo = () => travel(redoStack, undoStack, 'redo');
+
+  function updateHistoryButtons() {
+    $('#undo').disabled = !undoStack.length;
+    $('#redo').disabled = !redoStack.length;
   }
 
   // ---------- Item operations ----------
@@ -520,6 +613,7 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
       text: '', z: ++maxZ,
       ...extra,
     };
+    noteBefore(item.id);
     items.set(item.id, item);
     render(item);
     queueUpsert(item);
@@ -528,31 +622,39 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
 
   function deleteItems(ids) {
     if (!ids.length) return;
+    beginChange();
     for (const id of ids) queueDelete(id);
     flush();
+    commitChange();
     updateContextbar();
   }
 
   function duplicateSelected() {
+    beginChange();
     const copies = [...selected]
       .map((id) => items.get(id))
       .sort((a, b) => a.z - b.z)
       .map((it) => {
         const copy = { ...JSON.parse(JSON.stringify(it)), id: uid(), x: it.x + 24, y: it.y + 24, z: ++maxZ };
+        noteBefore(copy.id);
         items.set(copy.id, copy);
         render(copy);
         queueUpsert(copy);
         return copy.id;
       });
+    commitChange();
     setSelection(copies);
   }
 
   function bringToFront() {
+    beginChange();
     for (const it of [...selected].map((id) => items.get(id)).sort((a, b) => a.z - b.z)) {
+      noteBefore(it.id);
       it.z = ++maxZ;
       render(it);
       queueUpsert(it);
     }
+    commitChange();
   }
 
   function setTool(next) {
@@ -566,7 +668,7 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
 
   function updateContextbar() {
     const sel = [...selected].map((id) => items.get(id)).filter(Boolean);
-    const creating = !['select', 'hand'].includes(tool);
+    const creating = !['select', 'hand', 'eraser'].includes(tool);
     if (!sel.length && !creating) {
       contextbar.hidden = true;
       return;
@@ -584,11 +686,14 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
       b.title = 'Colour';
       b.addEventListener('click', () => {
         colorIndex = i;
+        beginChange();
         for (const it of sel) {
+          noteBefore(it.id);
           it.color = paletteFor(it.type)[i];
           render(it);
           queueUpsert(it);
         }
+        commitChange();
         updateContextbar();
       });
       swatchesEl.appendChild(b);
@@ -605,6 +710,7 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
       canvas.removeEventListener('pointercancel', up);
       if (onUp) onUp(ev);
       flush();
+      commitChange();
     };
     canvas.addEventListener('pointermove', move);
     canvas.addEventListener('pointerup', up);
@@ -625,6 +731,8 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
     const start = toWorld(e);
     const origins = [...selected].map((id) => items.get(id)).filter(Boolean).map((it) => ({ it, x: it.x, y: it.y }));
     let moved = false;
+    beginChange();
+    for (const o of origins) noteBefore(o.it.id);
     drag(e, (ev) => {
       const p = toWorld(ev);
       const dx = p.x - start.x, dy = p.y - start.y;
@@ -644,6 +752,8 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
     const start = toWorld(e);
     const ow = item.w, oh = item.h;
     const [minW, minH] = MIN_SIZE[item.type] || [20, 20];
+    beginChange();
+    noteBefore(id);
     drag(e, (ev) => {
       const p = toWorld(ev);
       item.w = Math.round(Math.max(minW, ow + p.x - start.x));
@@ -656,6 +766,7 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
   function startShape(type, e) {
     const start = toWorld(e);
     let item = null;
+    beginChange();
     drag(e, (ev) => {
       const p = toWorld(ev);
       if (!item && Math.hypot(p.x - start.x, p.y - start.y) * view.z < 4) return;
@@ -678,6 +789,7 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
 
   function startPen(e) {
     const pts = [[toWorld(e).x, toWorld(e).y]];
+    beginChange();
     const item = createItem('pen', pts[0][0], pts[0][1], { w: 1, h: 1, points: [[0, 0]] });
     const update = () => {
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -699,6 +811,32 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
       if (Math.hypot(p.x - lx, p.y - ly) * view.z < 2) return;
       pts.push([p.x, p.y]);
       update();
+    });
+  }
+
+  // Erases whole pen strokes it passes over; sticky notes, text and shapes are left alone.
+  function startErase(e) {
+    let last = { x: e.clientX, y: e.clientY };
+    const hitAt = (x, y) => {
+      for (const el of document.elementsFromPoint(x, y)) {
+        if (!el.classList.contains('hit')) continue;
+        const id = el.closest('.item').dataset.id;
+        if (erasing.has(id)) continue;
+        erasing.add(id);
+        els.get(id).classList.add('erasing');
+      }
+    };
+    // Sample every few pixels so a fast swipe doesn't skip over thin strokes.
+    const sweep = (x, y) => {
+      const steps = Math.max(1, Math.ceil(Math.hypot(x - last.x, y - last.y) / 4));
+      for (let i = 1; i <= steps; i++) hitAt(last.x + ((x - last.x) * i) / steps, last.y + ((y - last.y) * i) / steps);
+      last = { x, y };
+    };
+    hitAt(e.clientX, e.clientY);
+    drag(e, (ev) => sweep(ev.clientX, ev.clientY), () => {
+      const ids = [...erasing].filter((id) => items.has(id));
+      erasing.clear();
+      deleteItems(ids);
     });
   }
 
@@ -750,13 +888,17 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
     switch (tool) {
       case 'pen':
         return startPen(e);
+      case 'eraser':
+        return startErase(e);
       case 'sticky': {
         const [w, h] = DEFAULT_SIZE.sticky;
+        beginChange();
         const item = createItem('sticky', p.x - w / 2, p.y - h / 2);
         setTool('select');
         return startEditing(item.id);
       }
       case 'text': {
+        beginChange();
         const item = createItem('text', p.x, p.y - 18);
         setTool('select');
         return startEditing(item.id);
@@ -771,6 +913,7 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
       e.preventDefault();
       if (id) return startEditing(id);
       const [w, h] = DEFAULT_SIZE.sticky;
+      beginChange();
       return startEditing(createItem('sticky', p.x - w / 2, p.y - h / 2).id);
     }
     if (e.target.classList.contains('handle') && id) return startResize(id, e);
@@ -836,6 +979,12 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
     } else if (e.key === 'Enter' && selected.size === 1) {
       e.preventDefault();
       startEditing([...selected][0]);
+    } else if (mod && e.key.toLowerCase() === 'z') {
+      e.preventDefault();
+      e.shiftKey ? redo() : undo();
+    } else if (mod && e.key.toLowerCase() === 'y') {
+      e.preventDefault();
+      redo();
     } else if (mod && e.key.toLowerCase() === 'd') {
       e.preventDefault();
       duplicateSelected();
@@ -849,7 +998,7 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
       e.preventDefault();
       zoomCenter(1 / 1.2);
     } else if (!mod && !e.altKey) {
-      const keyTools = { v: 'select', h: 'hand', n: 'sticky', t: 'text', r: 'rect', o: 'ellipse', p: 'pen' };
+      const keyTools = { v: 'select', h: 'hand', n: 'sticky', t: 'text', r: 'rect', o: 'ellipse', p: 'pen', e: 'eraser' };
       const next = keyTools[e.key.toLowerCase()];
       if (next) setTool(next);
     }
@@ -872,6 +1021,8 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
   $('#delete').addEventListener('click', () => deleteItems([...selected]));
   $('#duplicate').addEventListener('click', duplicateSelected);
   $('#to-front').addEventListener('click', bringToFront);
+  $('#undo').addEventListener('click', undo);
+  $('#redo').addEventListener('click', redo);
   $('#clear').addEventListener('click', () => {
     if (!items.size || !confirm('Clear the whole board for everyone?')) return;
     deleteItems([...items.keys()]);
@@ -903,6 +1054,7 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
   renderPeople();
   setTool('select');
   restoreFromTab();
+  updateHistoryButtons();
   updateStatus();
   setInterval(updateStatus, 2000);
   window.addEventListener('pagehide', () => {
