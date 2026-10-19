@@ -11,6 +11,35 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
   const paletteFor = (type) => (type === 'sticky' ? STICKY_COLORS : INK_COLORS);
 
   const $ = (sel) => document.querySelector(sel);
+
+  // ---------- Theme ----------
+  // Follows the system setting until the viewer picks one with the toggle.
+  const darkQuery = matchMedia('(prefers-color-scheme: dark)');
+  const currentTheme = () => document.documentElement.dataset.theme || (darkQuery.matches ? 'dark' : 'light');
+
+  function syncThemeButtons() {
+    const mode = currentTheme();
+    for (const b of document.querySelectorAll('.theme-toggle')) {
+      b.dataset.mode = mode;
+      b.title = mode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+      b.setAttribute('aria-label', b.title);
+    }
+  }
+
+  for (const b of document.querySelectorAll('.theme-toggle')) {
+    b.addEventListener('click', () => {
+      const next = currentTheme() === 'dark' ? 'light' : 'dark';
+      document.documentElement.dataset.theme = next;
+      try { localStorage.setItem('liveboard:theme', next); } catch {}
+      syncThemeButtons();
+    });
+  }
+  darkQuery.addEventListener('change', syncThemeButtons);
+  syncThemeButtons();
+
+  // The default ink is stored as near-black but drawn in the theme's text colour,
+  // so it stays readable in dark mode and boards look the same to everyone.
+  const inkColor = (c) => (c === INK_COLORS[0] ? 'var(--ink)' : c);
   const match = location.pathname.match(/^\/b\/([A-Za-z0-9_-]{4,64})\/?$/);
   if (!match) {
     const bytes = crypto.getRandomValues(new Uint8Array(10));
@@ -416,13 +445,13 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
     if (item.type === 'pen') {
       const d = penPath(item.points);
       for (const p of el.querySelectorAll('path')) p.setAttribute('d', d);
-      el.querySelector('.ink').style.stroke = item.color;
+      el.querySelector('.ink').style.stroke = inkColor(item.color);
       return;
     }
     const text = el.querySelector('.text');
     if (item.type === 'sticky') el.style.background = item.color;
-    if (item.type === 'text') text.style.color = item.color;
-    if (item.type === 'rect' || item.type === 'ellipse') el.querySelector('.shape').style.color = item.color;
+    if (item.type === 'text') text.style.color = inkColor(item.color);
+    if (item.type === 'rect' || item.type === 'ellipse') el.querySelector('.shape').style.color = inkColor(item.color);
     if (editingId !== item.id && text.textContent !== (item.text || '')) text.textContent = item.text || '';
   }
 
@@ -551,7 +580,7 @@ import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
     palette.forEach((c, i) => {
       const b = document.createElement('button');
       b.className = 'swatch' + (i === active ? ' active' : '');
-      b.style.background = c;
+      b.style.background = inkColor(c);
       b.title = 'Colour';
       b.addEventListener('click', () => {
         colorIndex = i;

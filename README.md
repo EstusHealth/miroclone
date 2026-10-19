@@ -6,6 +6,7 @@ plain static site. There is no backend and no database.
 - Open `/`, click **Create a board** to get a link like `/b/k7m2xq9pda`. Send it to anyone.
 - Everyone with the link sees the same board live: sticky notes, text, rectangles,
   ellipses, freehand pen, and each other's cursors.
+- Light and dark mode: follows your system setting, or use the sun/moon toggle (remembered per browser).
 - Nothing is stored on any server. The board exists only in the browsers that have it open.
   When the last person closes the tab, it's gone. (A copy is kept in the tab's
   `sessionStorage` so a refresh doesn't wipe it when you're alone; closing the tab clears it.)

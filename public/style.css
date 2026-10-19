@@ -8,7 +8,56 @@
   --accent-soft: #eef0ff;
   --shadow: 0 2px 8px rgba(20, 22, 40, 0.08), 0 1px 2px rgba(20, 22, 40, 0.06);
   --dot: #d3d5dc;
+  --hover: #f1f2f5;
+  --accent-text: #4f46e5;
+  --ink: #1f2330;
+  --swatch-ring: rgba(0, 0, 0, 0.08);
+  --placeholder: rgba(0, 0, 0, 0.35);
+  --toast-bg: #1f2330;
+  --toast-text: #ffffff;
   --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #16171d;
+    --panel: #22242c;
+    --text: #e8e9ee;
+    --muted: #9a9fb0;
+    --border: #33363f;
+    --accent: #6366f1;
+    --accent-soft: rgba(129, 140, 248, 0.16);
+    --shadow: 0 2px 8px rgba(0, 0, 0, 0.45), 0 1px 2px rgba(0, 0, 0, 0.35);
+    --dot: #30323c;
+    --hover: #2c2f38;
+    --accent-text: #a5b4fc;
+    --ink: #e8e9ee;
+    --swatch-ring: rgba(255, 255, 255, 0.18);
+    --placeholder: rgba(255, 255, 255, 0.4);
+    --toast-bg: #e8e9ee;
+    --toast-text: #16171d;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #16171d;
+  --panel: #22242c;
+  --text: #e8e9ee;
+  --muted: #9a9fb0;
+  --border: #33363f;
+  --accent: #6366f1;
+  --accent-soft: rgba(129, 140, 248, 0.16);
+  --shadow: 0 2px 8px rgba(0, 0, 0, 0.45), 0 1px 2px rgba(0, 0, 0, 0.35);
+  --dot: #30323c;
+  --hover: #2c2f38;
+  --accent-text: #a5b4fc;
+  --ink: #e8e9ee;
+  --swatch-ring: rgba(255, 255, 255, 0.18);
+  --placeholder: rgba(255, 255, 255, 0.4);
+  --toast-bg: #e8e9ee;
+  --toast-text: #16171d;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -51,7 +100,9 @@ body {
 .landing-card h1 { font-size: 30px; line-height: 1.15; margin: 24px 0 12px; letter-spacing: -0.01em; }
 .landing-card p { color: var(--muted); line-height: 1.55; margin: 0 0 28px; }
 .facts { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 0; margin: 24px 0 0; list-style: none; color: var(--muted); font-size: 13px; }
-.facts li::before { content: "✓ "; color: var(--accent); font-weight: 700; }
+.facts li::before { content: "✓ "; color: var(--accent-text); font-weight: 700; }
+.landing-card { position: relative; }
+.landing-card .theme-toggle { position: absolute; top: 16px; right: 16px; }
 
 /* ---------- Board layout ---------- */
 #board { position: fixed; inset: 0; overflow: hidden; }
@@ -81,7 +132,7 @@ body {
   box-shadow: 0 1px 2px rgba(0,0,0,.12), 0 6px 14px -4px rgba(0,0,0,.18);
   border-radius: 2px;
 }
-.item.sticky .text { padding: 14px; font-size: 18px; display: flex; align-items: center; justify-content: center; text-align: center; }
+.item.sticky .text { color: #1f2330; padding: 14px; font-size: 18px; display: flex; align-items: center; justify-content: center; text-align: center; }
 .item.text .text { font-size: 22px; font-weight: 500; overflow: visible; }
 .item.rect .shape, .item.ellipse .shape {
   position: absolute; inset: 0; border: 2.5px solid currentColor;
@@ -103,12 +154,13 @@ body {
 .item.pen path.hit { stroke: transparent; stroke-width: 16; pointer-events: stroke; }
 
 /* Placeholder for empty editable text */
-.item.editing .text:empty::before { content: "Type something…"; color: rgba(0,0,0,.35); }
+.item.editing .text:empty::before { content: "Type something…"; color: var(--placeholder); }
+.item.sticky.editing .text:empty::before { color: rgba(0, 0, 0, 0.35); }
 
 .item.selected { outline: 2px solid var(--accent); outline-offset: 3px; }
 .item .handle {
   position: absolute; right: -9px; bottom: -9px; width: 12px; height: 12px;
-  background: #fff; border: 2px solid var(--accent); border-radius: 3px;
+  background: var(--panel); border: 2px solid var(--accent); border-radius: 3px;
   cursor: nwse-resize; display: none;
 }
 .item.selected.single .handle { display: block; }
@@ -142,6 +194,15 @@ body {
 }
 .topbar .btn { height: 44px; border-radius: 10px; box-shadow: var(--shadow); }
 .spacer { flex: 1; }
+.theme-toggle {
+  width: 44px; height: 44px; display: grid; place-items: center;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--panel); color: var(--text); cursor: pointer;
+}
+.topbar .theme-toggle { box-shadow: var(--shadow); }
+.landing-card .theme-toggle { width: 38px; height: 38px; }
+.theme-toggle[data-mode="dark"] .icon-moon,
+.theme-toggle[data-mode="light"] .icon-sun { display: none; }
 .status {
   font-size: 12px; color: var(--muted);
   background: var(--panel); border: 1px solid var(--border); border-radius: 999px;
@@ -176,9 +237,9 @@ body {
   border: 0; border-radius: 8px; background: transparent; color: var(--text); cursor: pointer;
   font: 600 14px var(--font);
 }
-.toolbar button:hover, .contextbar button:hover, .zoombar button:hover { background: #f1f2f5; }
-.toolbar button.active { background: var(--accent-soft); color: var(--accent); }
-.toolbar svg, .contextbar svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.toolbar button:hover, .contextbar button:hover, .zoombar button:hover, .theme-toggle:hover { background: var(--hover); }
+.toolbar button.active { background: var(--accent-soft); color: var(--accent-text); }
+.toolbar svg, .contextbar svg, .theme-toggle svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
 .contextbar {
   position: absolute; left: 50%; top: 68px; transform: translateX(-50%);
@@ -188,7 +249,7 @@ body {
 .swatches { display: flex; gap: 6px; padding: 0 4px; }
 .swatch {
   width: 22px; height: 22px; border-radius: 50%; cursor: pointer; padding: 0;
-  border: 2px solid rgba(0,0,0,.08);
+  border: 2px solid var(--swatch-ring);
 }
 .swatch.active { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--accent); }
 .contextbar.tool-only button:not(.swatch), .contextbar.tool-only .divider { display: none; }
@@ -210,7 +271,7 @@ body {
 
 .toast {
   position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%);
-  background: #1f2330; color: #fff; font-size: 14px;
+  background: var(--toast-bg); color: var(--toast-text); font-size: 14px;
   padding: 10px 16px; border-radius: 10px; box-shadow: var(--shadow);
 }
 
