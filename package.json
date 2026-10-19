@@ -1,17 +1,14 @@
 {
   "name": "miroclone",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "Shareable live whiteboards. Nothing is stored: a board lives only while someone has it open.",
-  "main": "server.js",
+  "description": "Shareable live whiteboards. Peer-to-peer, static hosting, nothing stored.",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node scripts/dev-server.js",
+    "vendor": "esbuild scripts/vendor-entry.js --bundle --format=esm --minify --outfile=public/vendor/trystero.js"
   },
-  "engines": {
-    "node": ">=18"
-  },
-  "dependencies": {
-    "ws": "^8.18.0"
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "trystero": "0.26.0"
   }
 }

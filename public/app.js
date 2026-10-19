@@ -1,5 +1,6 @@
+import { joinRoom, selfId, getRelaySockets } from '/vendor/trystero.js';
+
 (() => {
-  'use strict';
 
   const STICKY_COLORS = ['#fde68a', '#fdba74', '#f9a8d4', '#c4b5fd', '#93c5fd', '#86efac', '#e5e7eb'];
   const INK_COLORS = ['#1f2330', '#ef4444', '#f59e0b', '#ec4899', '#8b5cf6', '#3b82f6', '#10b981'];
@@ -12,6 +13,9 @@
   const $ = (sel) => document.querySelector(sel);
   const match = location.pathname.match(/^\/b\/([A-Za-z0-9_-]{4,64})\/?$/);
   if (!match) {
+    const bytes = crypto.getRandomValues(new Uint8Array(10));
+    const id = [...bytes].map((b) => 'abcdefghijkmnpqrstuvwxyz23456789'[b % 32]).join('');
+    $('#create').href = `/b/${id}`;
     $('#landing').hidden = false;
     return;
   }
@@ -68,99 +72,162 @@
     try { localStorage.setItem('liveboard:me', JSON.stringify(id)); } catch {}
   }
 
-  // ---------- Networking ----------
-  let ws = null;
-  let retry = 0;
-  const pending = new Map();
-  let flushTimer = null;
-  let lastCursorSent = 0;
+  // ---------- Peer-to-peer sync ----------
+  // There is no server. Browsers find each other through public Nostr relays
+  // (only encrypted connection offers pass through them), then send board edits
+  // directly to each other over WebRTC. The board only exists in open tabs.
+  const room = joinRoom({ appId: 'liveboard-estushealth-v1', password: roomId }, roomId, {
+    onJoinError: (details) => console.warn('Could not connect to a peer', details),
+  });
+  const presenceAction = room.makeAction('presence');
+  const cursorAction = room.makeAction('cursor');
+  const opsAction = room.makeAction('ops');
 
-  function connect() {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    ws = new WebSocket(`${proto}://${location.host}/ws?room=${encodeURIComponent(roomId)}`);
-    setStatus(retry ? 'Reconnecting…' : 'Connecting…', 'connecting');
-    ws.onopen = () => {
-      retry = 0;
-      setStatus('Live', 'live');
-      send({ t: 'hello', name: me.name, color: me.color });
-    };
-    ws.onmessage = (e) => {
-      let msg;
-      try { msg = JSON.parse(e.data); } catch { return; }
-      handleMessage(msg);
-    };
-    ws.onclose = () => {
-      setStatus('Offline, retrying…', 'offline');
-      for (const id of [...users.keys()]) removeUser(id);
-      setTimeout(connect, Math.min(1000 * 2 ** retry++, 10000));
-    };
+  // Every local change bumps an item's version; the highest version wins (peer id breaks ties).
+  // Deleted items leave a tombstone so a peer with an older copy can't bring them back.
+  const tombs = new Map(); // id -> { id, v, by }
+  const pending = new Map();
+  let pendingDels = [];
+  let flushTimer = null;
+  let saveTimer = null;
+  let lastCursorSent = 0;
+  const startedAt = Date.now();
+  const STORAGE_KEY = `liveboard:board:${roomId}`;
+  const TYPES = new Set(['sticky', 'text', 'rect', 'ellipse', 'pen']);
+  const COLOR_RE = /^#[0-9a-f]{3,8}$/i;
+  const isNum = (n) => typeof n === 'number' && Number.isFinite(n);
+
+  function isNewer(a, b) {
+    return !b || a.v > b.v || (a.v === b.v && a.by > b.by);
   }
 
-  function send(msg) {
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+  function isValidItem(it) {
+    return it && typeof it.id === 'string' && it.id.length <= 64 && TYPES.has(it.type) &&
+      isNum(it.x) && isNum(it.y) && isNum(it.w) && isNum(it.h) && isNum(it.v) &&
+      typeof it.by === 'string' && COLOR_RE.test(it.color) &&
+      (it.text === undefined || typeof it.text === 'string') &&
+      (it.points === undefined || Array.isArray(it.points));
+  }
+
+  function mergeItem(incoming) {
+    if (!isValidItem(incoming)) return;
+    const local = items.get(incoming.id);
+    if (!isNewer(incoming, local || tombs.get(incoming.id))) return;
+    tombs.delete(incoming.id);
+    // Update in place so in-progress drags keep pointing at the live object.
+    let item = local;
+    if (item) {
+      const text = item.text;
+      Object.assign(item, incoming);
+      if (editingId === item.id) item.text = text; // keep what we're typing
+    } else {
+      item = { ...incoming };
+      items.set(item.id, item);
+    }
+    maxZ = Math.max(maxZ, isNum(item.z) ? item.z : 0);
+    render(item);
+  }
+
+  function mergeTomb(t) {
+    if (!t || typeof t.id !== 'string' || !isNum(t.v) || typeof t.by !== 'string') return;
+    if (!isNewer(t, items.get(t.id) || tombs.get(t.id))) return;
+    removeItem(t.id);
+    tombs.set(t.id, { id: t.id, v: t.v, by: t.by });
+  }
+
+  function applyOps(ops) {
+    if (!ops) return;
+    if (Array.isArray(ops.up)) ops.up.forEach(mergeItem);
+    if (Array.isArray(ops.del)) ops.del.forEach(mergeTomb);
+    updateContextbar();
+    scheduleSave();
+  }
+
+  function snapshot() {
+    return { up: [...items.values()], del: [...tombs.values()] };
   }
 
   function queueUpsert(item) {
+    if (items.get(item.id) !== item) return; // deleted while being edited
+    item.v = (item.v || 0) + 1;
+    item.by = selfId;
     pending.set(item.id, item);
     if (!flushTimer) flushTimer = setTimeout(flush, 40);
+  }
+
+  function queueDelete(id) {
+    const item = items.get(id);
+    const tomb = { id, v: ((item && item.v) || 0) + 1, by: selfId };
+    removeItem(id);
+    tombs.set(id, tomb);
+    pendingDels.push(tomb);
   }
 
   function flush() {
     clearTimeout(flushTimer);
     flushTimer = null;
-    if (!pending.size) return;
-    send({ t: 'upsert', items: [...pending.values()] });
+    if (!pending.size && !pendingDels.length) return;
+    if (users.size) opsAction.send({ up: [...pending.values()], del: pendingDels });
     pending.clear();
+    pendingDels = [];
+    scheduleSave();
   }
 
-  function handleMessage(msg) {
-    switch (msg.t) {
-      case 'init': {
-        for (const u of msg.users) upsertUser(u);
-        if (!msg.items.length && items.size) {
-          // The server forgot the board (e.g. it restarted) but we still have it: hand it back.
-          send({ t: 'upsert', items: [...items.values()] });
-        } else {
-          for (const id of [...items.keys()]) removeItem(id);
-          for (const item of msg.items) applyRemoteItem(item);
-        }
-        renderPeople();
-        break;
-      }
-      case 'join':
-        upsertUser(msg.user);
-        renderPeople();
-        break;
-      case 'leave':
-        removeUser(msg.id);
-        renderPeople();
-        break;
-      case 'cursor':
-        moveCursor(msg.id, msg.x, msg.y);
-        break;
-      case 'upsert':
-        for (const item of msg.items) applyRemoteItem(item);
-        updateContextbar();
-        break;
-      case 'delete':
-        for (const id of msg.ids) removeItem(id);
-        updateContextbar();
-        break;
-      case 'clear':
-        for (const id of [...items.keys()]) removeItem(id);
-        updateContextbar();
-        break;
-    }
+  // A copy kept in this tab only (sessionStorage), so a refresh doesn't wipe the
+  // board when you're alone. It's cleared when the tab closes.
+  function saveNow() {
+    clearTimeout(saveTimer);
+    try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot())); } catch {}
   }
 
-  function applyRemoteItem(item) {
-    if (!item || typeof item.id !== 'string') return;
-    const local = items.get(item.id);
-    // Keep what we're typing; only take position/size/colour from the remote copy.
-    if (local && editingId === item.id) item.text = local.text;
-    items.set(item.id, item);
-    maxZ = Math.max(maxZ, item.z || 0);
-    render(item);
+  function scheduleSave() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(saveNow, 500);
+  }
+
+  function restoreFromTab() {
+    try { applyOps(JSON.parse(sessionStorage.getItem(STORAGE_KEY))); } catch {}
+  }
+
+  room.onPeerJoin = (peerId) => {
+    if (!users.has(peerId)) upsertUser({ id: peerId, name: 'Joining…', color: '#9ca3af' });
+    presenceAction.send(me, { target: peerId });
+    opsAction.send(snapshot(), { target: peerId });
+    renderPeople();
+    updateStatus();
+  };
+
+  room.onPeerLeave = (peerId) => {
+    removeUser(peerId);
+    renderPeople();
+    updateStatus();
+  };
+
+  presenceAction.onMessage = (u, { peerId }) => {
+    if (!u) return;
+    upsertUser({
+      id: peerId,
+      name: String(u.name || 'Guest').slice(0, 32),
+      color: COLOR_RE.test(u.color) ? u.color : '#9ca3af',
+    });
+    renderPeople();
+  };
+
+  cursorAction.onMessage = (p, { peerId }) => {
+    if (Array.isArray(p) && isNum(p[0]) && isNum(p[1])) moveCursor(peerId, p[0], p[1]);
+  };
+
+  opsAction.onMessage = (ops) => applyOps(ops);
+
+  function updateStatus() {
+    if (users.size) return setStatus('Live', 'live');
+    let relaysUp = 0;
+    try {
+      relaysUp = Object.values(getRelaySockets()).filter((s) => s.readyState === WebSocket.OPEN).length;
+    } catch {}
+    if (relaysUp) return setStatus('Waiting for others', 'connecting');
+    if (Date.now() - startedAt > 15000) return setStatus('Can’t reach the network', 'offline');
+    setStatus('Connecting…', 'connecting');
   }
 
   // ---------- Presence ----------
@@ -246,7 +313,7 @@
     if (!name || !name.trim()) return;
     me.name = name.trim().slice(0, 32);
     saveIdentity(me);
-    send({ t: 'hello', name: me.name, color: me.color });
+    presenceAction.send(me);
     renderPeople();
   }
 
@@ -432,8 +499,8 @@
 
   function deleteItems(ids) {
     if (!ids.length) return;
-    for (const id of ids) removeItem(id);
-    send({ t: 'delete', ids });
+    for (const id of ids) queueDelete(id);
+    flush();
     updateContextbar();
   }
 
@@ -704,10 +771,10 @@
 
   canvas.addEventListener('pointermove', (e) => {
     const now = performance.now();
-    if (now - lastCursorSent < 40) return;
+    if (!users.size || now - lastCursorSent < 40) return;
     lastCursorSent = now;
     const p = toWorld(e);
-    send({ t: 'cursor', x: Math.round(p.x), y: Math.round(p.y) });
+    cursorAction.send([Math.round(p.x), Math.round(p.y)]);
   });
 
   canvas.addEventListener('wheel', (e) => {
@@ -778,9 +845,7 @@
   $('#to-front').addEventListener('click', bringToFront);
   $('#clear').addEventListener('click', () => {
     if (!items.size || !confirm('Clear the whole board for everyone?')) return;
-    for (const id of [...items.keys()]) removeItem(id);
-    send({ t: 'clear' });
-    updateContextbar();
+    deleteItems([...items.keys()]);
   });
 
   let toastTimer = null;
@@ -808,5 +873,11 @@
   applyView();
   renderPeople();
   setTool('select');
-  connect();
+  restoreFromTab();
+  updateStatus();
+  setInterval(updateStatus, 2000);
+  window.addEventListener('pagehide', () => {
+    flush();
+    saveNow();
+  });
 })();

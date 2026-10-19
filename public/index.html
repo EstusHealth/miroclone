@@ -17,11 +17,13 @@
       </div>
       <h1>A whiteboard you can share with a link.</h1>
       <p>Sticky notes, shapes, text and drawing, all live with everyone who has the link.
-        Nothing is saved. When the last person leaves, the board is gone.</p>
-      <a class="btn btn-primary btn-lg" href="/new">Create a board</a>
+        Browsers connect directly to each other, so nothing is stored on any server.
+        When the last person leaves, the board is gone.</p>
+      <a id="create" class="btn btn-primary btn-lg" href="/">Create a board</a>
       <ul class="facts">
         <li>No sign-up</li>
         <li>No storage</li>
+        <li>Peer-to-peer</li>
         <li>Real-time cursors</li>
       </ul>
     </div>
@@ -95,10 +97,10 @@
       <button id="zoom-in" title="Zoom in">+</button>
     </div>
 
-    <div class="ephemeral-note">Live only. This board disappears when everyone leaves.</div>
+    <div class="ephemeral-note">Peer-to-peer. This board only exists while someone has it open.</div>
     <div id="toast" class="toast" hidden></div>
   </div>
 
-  <script src="/app.js"></script>
+  <script type="module" src="/app.js"></script>
 </body>
 </html>
